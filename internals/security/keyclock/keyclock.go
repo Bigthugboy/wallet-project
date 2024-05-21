@@ -26,7 +26,7 @@ func NewKeycloak() *Keycloak {
 
 func (k *Keycloak) Login(payload *internals.KLoginPayload) (*internals.KLoginRes, error) {
 	if payload == nil || payload.Username == "" || payload.Password == "" {
-		log.Println(payload)
+		log.Println("Invalid login payload") 
 		return nil, errors.New("invalid login payload")
 	}
 
@@ -34,6 +34,7 @@ func (k *Keycloak) Login(payload *internals.KLoginPayload) (*internals.KLoginRes
 	if err != nil {
 		log.Printf("Login failed for user %s: %v", payload.Username, err)
 		return nil, err
+	
 	}
 
 	loginRes := &internals.KLoginRes{
@@ -50,6 +51,11 @@ func (k *Keycloak) Login(payload *internals.KLoginPayload) (*internals.KLoginRes
 	log.Printf("User %s logged in successfully", payload.Username)
 	return loginRes, nil
 }
+
+
+
+
+
 
 // const (
 // 	KeycloakBaseURL      = "http://localhost:8080"
