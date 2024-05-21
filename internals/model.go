@@ -22,6 +22,8 @@ type KLoginPayload struct {
 	Password     string
 	GrantType    string
 	ClientSecret string
+	Email        string
+	password     string
 }
 
 type LoginUser struct {
@@ -30,7 +32,14 @@ type LoginUser struct {
 }
 
 type KLoginRes struct {
-	AccessToken string `json:"access_token"`
+	AccessToken      string `json:"access_token"`
+	ExpiresIn        int
+	RefreshExpiresIn int
+	RefreshToken     string
+	TokenType        string
+	NotBeforePolicy  int
+	SessionState     string
+	Scope            string
 }
 
 type Wallet struct {

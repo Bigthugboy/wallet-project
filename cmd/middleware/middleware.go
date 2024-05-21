@@ -43,3 +43,31 @@ func Authenticate() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// func AuthMiddleware() gin.HandlerFunc {
+// 	return func(c *gin.Context) {
+// 		authHeader := c.GetHeader("Authorization")
+// 		if authHeader == "" {
+// 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+// 			c.Abort()
+// 			return
+// 		}
+
+// 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+// 		if tokenStr == authHeader {
+// 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Bearer token required"})
+// 			c.Abort()
+// 			return
+// 		}
+
+// 		// Validate the token
+// 		rptResult, err := k.goCloak.RetrospectToken(c, tokenStr, k.ClientID, k.ClientSecret, k.Realm)
+// 		if err != nil || !*rptResult.Active {
+// 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+// 			c.Abort()
+// 			return
+// 		}
+
+// 		c.Next()
+//}
+//}

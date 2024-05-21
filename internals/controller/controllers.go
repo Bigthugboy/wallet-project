@@ -12,7 +12,7 @@ import (
 	"github.com/Bigthugboy/wallet-project/internals"
 	"github.com/Bigthugboy/wallet-project/internals/db/query"
 	"github.com/Bigthugboy/wallet-project/internals/db/repo"
-	"github.com/Bigthugboy/wallet-project/internals/security"
+	"github.com/Bigthugboy/wallet-project/internals/security/keyclock"
 	"github.com/anjolabassey/Rave-go/rave"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/gorm"
@@ -20,14 +20,16 @@ import (
 )
 
 type Wallet struct {
-	App *config.AppTools
-	DB  repo.DBStore
+	App      *config.AppTools
+	DB       repo.DBStore
+	Keycloak *keyclock.Keycloak
 }
 
 func NewWallet(app *config.AppTools, db *gorm.DB) internals.Service {
 	return &Wallet{
-		App: app,
-		DB:  query.NewWalletDB(app, db),
+		App:      app,
+		DB:       query.NewWalletDB(app, db),
+		Keycloak: keyclock.NewKeycloak(),
 	}
 }
 
@@ -129,38 +131,41 @@ func (w *Wallet) GetTransactionWithID() gin.HandlerFunc {
 			log.Printf("Failed to encode transaction to JSON: %v", err)
 			return
 		}
-		
+
 		c.JSON(http.StatusOK, string(response))
 	}
 }
-
-// LoginHandler implements internals.Service.
 func (w *Wallet) LoginHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var payload *internals.PayLoad
+		var payload internals.KLoginPayload
 		if err := c.BindJSON(&payload); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Bad request"})
-			log.Println("Error decoding form:", err)
+			log.Println("Error decoding payload:", err)
 			return
 		}
-		userID, _, err := w.DB.SearchUserByEmail(payload.Email)
+
+		_, _, err := w.DB.SearchUserByEmail(payload.Username)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unregistered user"})
-			log.Println("user not registered:", payload.Email)
+			log.Println("user not registered:", payload.Username)
 			return
 		}
-		walletToken, refWalletToken, err := security.Generate(payload.Email, userID)
+		log.Println("------------------>  ", payload)
+		loginRes, err := w.Keycloak.Login(&payload)
+		log.Println("------------------>  ", payload)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate JWT tokens"})
 			log.Println("error generating JWT tokens:", err)
 			return
 		}
+
 		response := map[string]string{
-			"wallet_token":     walletToken,
-			"ref_wallet_token": refWalletToken,
+			"access_token":  loginRes.AccessToken,
+			"refresh_token": loginRes.RefreshToken,
+			"token_type":    loginRes.TokenType,
+			"session_state": loginRes.SessionState,
+			"scope":         loginRes.Scope,
 		}
-		fmt.Printf("Token created: %s\n", walletToken)
-		fmt.Printf("Token created: %s\n", refWalletToken)
 
 		c.JSON(http.StatusOK, response)
 	}
