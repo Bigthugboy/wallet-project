@@ -1,175 +1,165 @@
 package keyclock
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 
 	"github.com/Bigthugboy/wallet-project/internals"
-	"github.com/Nerzal/gocloak"
+	"github.com/golang-jwt/jwt/v5"
 )
 
-type Keycloak struct {
-	ClientID     string
-	ClientSecret string
-	Realm        string
-	goCloak      gocloak.GoCloak
+var secretKey = []byte("404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970")
+
+type keycloak struct {
+	AuthKeyMutex sync.RWMutex
+	BearerToken  string
 }
 
-func NewKeycloak() *Keycloak {
-	return &Keycloak{
-		goCloak:      gocloak.NewClient("http://localhost:8080"),
-		ClientID:     "wallet-test",
-		ClientSecret: "ZARfeL8Krkk6mAZEXWkrZuzTE6hUeB4",
-		Realm:        "Test",
+func GenerateToken(payload *internals.GenerateRequest) (string, error) {
+	form := url.Values{
+		"client_id":     {payload.ClientId},
+		"client_secret": {payload.ClientSecret},
+		"grant_type":    {payload.GrantType},
+		"username":      {payload.Username},
+		"password":      {payload.Password},
 	}
-}
-
-func (k *Keycloak) Login(payload *internals.KLoginPayload) (*internals.KLoginRes, error) {
-	if payload == nil || payload.Username == "" || payload.Password == "" {
-		log.Println(payload)
-		return nil, errors.New("invalid login payload")
-	}
-
-	token, err := k.goCloak.Login(k.ClientID, k.ClientSecret, k.Realm, payload.Username, payload.Password)
+	encodedData := form.Encode()
+	req, err := http.NewRequest("POST", "http://localhost:8080/realms/test/protocol/openid-connect/token", strings.NewReader(encodedData))
 	if err != nil {
-		log.Printf("Login failed for user %s: %v", payload.Username, err)
+		log.Println("Error creating request: ", err)
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Println("Error performing request: ", err)
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Println("Non-OK HTTP status: ", resp.StatusCode)
+		return "", errors.New("something went wrong while connecting to Keycloak")
+	}
+
+	var tokenResponse internals.TokenResponse
+	err = json.NewDecoder(resp.Body).Decode(&tokenResponse)
+	if err != nil {
+		log.Println("Error decoding response: ", err)
+		return "", err
+	}
+
+	k := keycloak{}
+	k.AuthKeyMutex.Lock()
+	k.BearerToken = tokenResponse.AccessToken
+	k.AuthKeyMutex.Unlock()
+
+	return tokenResponse.AccessToken, nil
+}
+
+func Login(payload *internals.KLoginPayload) (*internals.KLoginRes, error) {
+
+	formData := url.Values{
+		"client_id":     {payload.ClientID},
+		"client_secret": {payload.ClientSecret},
+		"grant_type":    {payload.GrantType},
+		"username":      {payload.Username},
+		"password":      {payload.Password},
+	}
+	encodedFormData := formData.Encode()
+
+	req, err := http.NewRequest("POST", "http://localhost:8080/realms/test/protocol/openid-connect/token", strings.NewReader(encodedFormData))
+	if err != nil {
+		log.Println("Error creating request: ", err)
 		return nil, err
 	}
 
-	loginRes := &internals.KLoginRes{
-		AccessToken:      token.AccessToken,
-		ExpiresIn:        token.ExpiresIn,
-		RefreshExpiresIn: token.RefreshExpiresIn,
-		RefreshToken:     token.RefreshToken,
-		TokenType:        token.TokenType,
-		NotBeforePolicy:  token.NotBeforePolicy,
-		SessionState:     token.SessionState,
-		Scope:            token.Scope,
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Println("Error performing request: ", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Println("Non-OK HTTP status: ", resp.StatusCode)
+		return nil, errors.New("something went wrong while connecting to Keycloak")
 	}
 
-	log.Printf("User %s logged in successfully", payload.Username)
-	return loginRes, nil
+	kloginresp := &internals.KLoginRes{}
+
+	err = json.NewDecoder(resp.Body).Decode(kloginresp)
+	if err != nil {
+		log.Println("Error decoding response: ", err)
+		return nil, err
+	}
+
+	return kloginresp, nil
+
 }
 
-// const (
-// 	KeycloakBaseURL      = "http://localhost:8080"
-// 	Realm                = "Test"
-// 	KeycloakClientID     = "Wallet-test"
-// 	KeycloakClientSecret = "kYZuoM13FjxSmIjRcSMf8Ujz9UHC7NC6"
-// )
+func ValidateToken(token string) (bool, error) {
+	keycloakPublicKey, err := fetchKeycloakPublicKey()
+	if err != nil {
+		return false, err
+	}
 
-// type KLoginPayload struct {
-// 	ClientID     string
-// 	ClientSecret string
-// 	Username     string
-// 	Password     string
-// }
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// Ensure the token method conforms to "RS256"
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
 
-// type KLoginRes struct {
-// 	AccessToken string
-// 	ExpiresIn   int
-// }
+		// Parse the public key
+		publicKey, err := jwt.ParseRSAPublicKeyFromPEM([]byte(keycloakPublicKey))
+		if err != nil {
+			return nil, err
+		}
 
-// type UserInfo struct {
-// 	Username string
-// }
+		return publicKey, nil
+	})
+	if err != nil {
+		return false, err
+	}
 
-// func main() {
-// 	client := &http.Client{}
+	return parsedToken.Valid, nil
+}
+func fetchKeycloakPublicKey() (string, error) {
+	resp, err := http.Get("http://localhost:8080/realms/test/protocol/openid-connect/certs")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
 
-// 	// Test login
-// 	payload := &KLoginPayload{
-// 		ClientID:     KeycloakClientID,
-// 		ClientSecret: KeycloakClientSecret,
-// 		Username:     "test-wallet",
-// 		Password:     "Labete",
-// 	}
-// 	issueTime := time.Now()
-// 	loginRes, err := login(client, payload)
-// 	if err != nil {
-// 		fmt.Printf("Login failed: %v\n", err)
-// 		return
-// 	}
+	if resp.StatusCode != http.StatusOK {
+		return "", errors.New("failed to fetch public key from Keycloak")
+	}
 
-// 	fmt.Printf("Login successful: %v\n", loginRes.AccessToken)
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 
-// 	// Check if the token is still active
-// 	if time.Since(issueTime).Seconds() < float64(loginRes.ExpiresIn) {
-// 		// The token is still active
-// 		userInfo, err := extractUserInfo(client, loginRes.AccessToken)
-// 		if err != nil {
-// 			fmt.Printf("Extract user info failed: %v\n", err)
-// 			return
-// 		}
-// 		fmt.Printf("User info: %+v\n", userInfo)
-// 	} else {
-// 		// The token has expired
-// 		fmt.Println("The token has expired. Please login again.")
-// 	}
-// }
+	// You need to parse the JSON response to extract the public key
+	// For simplicity, assuming the public key is available as a single string
+	// In practice, you would parse the JWK and convert it to PEM format
+	var keycloakPublicKey string
 
-// func login(client *http.Client, payload *KLoginPayload) (*KLoginRes, error) {
-// 	formData := url.Values{
-// 		"client_id":     {payload.ClientID},
-// 		"client_secret": {payload.ClientSecret},
-// 		"grant_type":    {"password"},
-// 		"username":      {payload.Username},
-// 		"password":      {payload.Password},
-// 		"scope":         {"openid profile email"},
-// 	}
-// 	encodedFormData := formData.Encode()
+	// Implement JSON parsing to extract the public key from the response
+	// For example, use a library like "encoding/json" to parse the response
 
-// 	loginURL := KeycloakBaseURL + "/realms/" + Realm + "/protocol/openid-connect/token"
-// 	req, err := http.NewRequest("POST", loginURL, strings.NewReader(encodedFormData))
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer resp.Body.Close()
-
-// 	if resp.StatusCode != http.StatusOK {
-// 		body, _ := io.ReadAll(resp.Body)
-// 		return nil, fmt.Errorf("failed to login user, status code: %s, body: %s", resp.Status, string(body))
-// 	}
-
-// 	loginRes := &KLoginRes{}
-// 	err = json.NewDecoder(resp.Body).Decode(loginRes)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	return loginRes, nil
-// }
-
-// func extractUserInfo(client *http.Client, accessToken string) (*UserInfo, error) {
-// 	userInfoURL := KeycloakBaseURL + "/realms/" + Realm + "/protocol/openid-connect/userinfo"
-// 	req, err := http.NewRequest("GET", userInfoURL, nil)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	req.Header.Set("Authorization", "Bearer "+accessToken)
-
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer resp.Body.Close()
-
-// 	if resp.StatusCode != http.StatusOK {
-// 		body, _ := io.ReadAll(resp.Body)
-// 		return nil, fmt.Errorf("failed to extract user info, status code: %s, body: %s", resp.Status, string(body))
-// 	}
-
-// 	userInfo := &UserInfo{}
-// 	err = json.NewDecoder(resp.Body).Decode(userInfo)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	return userInfo, nil
-// }
+	return keycloakPublicKey, nil
+}

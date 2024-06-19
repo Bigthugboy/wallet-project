@@ -10,9 +10,10 @@ func SetupRoutes(r *gin.Engine, service internals.Service) {
 	// Register routes
 	r.POST("/register", service.RegisterHandler())
 	r.POST("/login", service.LoginHandler())
+	r.POST("/generate", service.GenerateHandler())
 
 	protectedRouter := r.Group("/api/auth")
-	protectedRouter.Use(middleware.Authenticate())
+	protectedRouter.Use(middleware.AuthMiddleware())
 	{
 		protectedRouter.POST("/payment", service.MakePayment())
 		protectedRouter.POST("/validate-payment", service.ValidatePayment())

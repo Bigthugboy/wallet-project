@@ -15,7 +15,7 @@ func (w *WalletDB) InsertUser(user internals.User) (int64, error) {
 	}
 
 	var existingUser internals.User
-	if err := w.DB.Where("email = ?", user.Email).First(&existingUser).Error; err != nil && err != gorm.ErrRecordNotFound {
+	if err := w.DB.Where("email = ?", user.Email).First(&existingUser).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return -1, err
 	}
 	if existingUser.ID != 0 {
@@ -42,7 +42,7 @@ func (w *WalletDB) SearchUserByEmail(email string) (int64, string, error) {
 		return -1, "", err
 	}
 
-	return int64(user.ID), user.FirstName, nil
+	return int64(user.ID), user.Email, nil
 }
 
 func (wa *WalletDB) CreateWallet(user *internals.User) error {
@@ -112,7 +112,7 @@ func (w *WalletDB) UpdateWalletBalance(userID int, amount float64) error {
 	}
 	var wallet internals.Wallet
 	if err := tx.Where("user_id = ?", userID).First(&wallet).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			tx.Rollback()
 			return err
 		}

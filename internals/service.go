@@ -11,4 +11,5 @@ type Service interface {
 	GetTransactionWithID() gin.HandlerFunc
 	CheckBalance() gin.HandlerFunc
 	GetExchangeRate() gin.HandlerFunc
+	GenerateHandler() gin.HandlerFunc
 }

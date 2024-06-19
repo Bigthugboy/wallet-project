@@ -1,10 +1,13 @@
 package internals
 
-import "github.com/jinzhu/gorm"
+import (
+	"github.com/jinzhu/gorm"
+)
 
 type User struct {
 	gorm.Model
 	FirstName   string `json:"firstName"`
+	Username    string `json:"username"`
 	LastName    string `json:"lastName"`
 	Email       string `json:"email" gorm:"unique;not null"`
 	Password    string `json:"password" gorm:"not null"`
@@ -33,13 +36,13 @@ type LoginUser struct {
 
 type KLoginRes struct {
 	AccessToken      string `json:"access_token"`
-	ExpiresIn        int
-	RefreshExpiresIn int
-	RefreshToken     string
-	TokenType        string
-	NotBeforePolicy  int
-	SessionState     string
-	Scope            string
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	TokenType        string `json:"token_type"`
+	NotBeforePolicy  int    `json:"not_before_policy"`
+	SessionState     string `json:"session_state"`
+	Scope            string `json:"scope"`
 }
 
 type Wallet struct {
@@ -72,10 +75,49 @@ type PayLoad struct {
 	Pin         string  `json:"pin"`
 	ExpiryMonth string  `json:"expirymonth"`
 	ExpiryYear  string  `json:"expiryyear"`
-	UserID      int     `json:userId`
+	UserID      int     `json:"userId"`
 }
 type ValidatePayload struct {
 	Reference string `json:"tx_ref"`
 	Otp       string `json:"otp"`
 	PublicKey string `json:"PBFPubKey"`
+}
+type KCreateUserPayload struct {
+	Username      string                 `json:"username"`
+	FirstName     string                 `json:"firstName"`
+	LastName      string                 `json:"lastName"`
+	Email         string                 `json:"email"`
+	Password      string                 `json:"password"`
+	EmailVerified bool                   `json:"emailVerified"`
+	Enabled       bool                   `json:"enabled"`
+	Credentials   []KUserCredential      `json:"credentials"`
+	Attributes    map[string]interface{} `json:"attributes"`
+}
+
+type KUserCredential struct {
+	Type      string `json:"type"`
+	Value     string `json:"value"`
+	Temporary bool   `json:"temporary"`
+}
+
+type KCreateRes struct {
+	Message string `json:"message"`
+}
+
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	TokenType   string `json:"token_type"`
+}
+
+type GenerateRequest struct {
+	ClientId     string
+	ClientSecret string
+	GrantType    string
+	Username     string
+	Password     string
+}
+type GenerateCliReq struct {
+	ClientId     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret"`
 }

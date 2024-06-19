@@ -1,13 +1,10 @@
 package controller
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"log"
-	"net/http"
-
 	"github.com/Bigthugboy/wallet-project/config"
 	"github.com/Bigthugboy/wallet-project/internals"
 	"github.com/Bigthugboy/wallet-project/internals/db/query"
@@ -16,31 +13,34 @@ import (
 	"github.com/anjolabassey/Rave-go/rave"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/gorm"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"sync"
 )
 
 type Wallet struct {
-	App      *config.AppTools
-	DB       repo.DBStore
-	Keycloak *keyclock.Keycloak
+	App          *config.AppTools
+	DB           repo.DBStore
+	AuthKeyMutex sync.RWMutex
+	BearerToken  string
 }
-
-func NewWallet(app *config.AppTools, db *gorm.DB) internals.Service {
-	return &Wallet{
-		App:      app,
-		DB:       query.NewWalletDB(app, db),
-		Keycloak: keyclock.NewKeycloak(),
-	}
-}
-
-var secretKey = "FLWSECK_TEST-7c8c2dcff4d2a9cb96fe3a34812e1e90-X"
 
 var card = rave.Card{
 	Rave: rave.Rave{
 		Live:      false,
 		PublicKey: "FLWPUBK_TEST-727132610f7bb0781b0343b0b0de55e7-X",
-		SecretKey: secretKey,
+		SecretKey: "FLWSECK_TEST-7c8c2dcff4d2a9cb96fe3a34812e1e90-X",
 	},
+}
+
+func NewWallet(app *config.AppTools, db *gorm.DB) internals.Service {
+	return &Wallet{
+		App: app,
+		DB:  query.NewWalletDB(app, db),
+	}
 }
 
 func Encrypt(password string) (string, error) {
@@ -54,6 +54,40 @@ func Encrypt(password string) (string, error) {
 	return string(hashedPassword), nil
 }
 
+func (w *Wallet) GenerateHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var payload internals.GenerateCliReq
+		if err := c.BindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Bad request"})
+			log.Println("Error decoding payload:", err)
+			return
+		}
+		log.Println("Received login payload:", payload)
+
+		kLogin := internals.GenerateRequest{
+			ClientId:     "supper-client",
+			ClientSecret: "sbzfcpBSZ1RgXnOutmVI7gyvz4gyLnvL",
+			GrantType:    "client_credentials",
+			Username:     "admin",
+			Password:     "admin",
+		}
+
+		token, err := keyclock.GenerateToken(&kLogin)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate JWT tokens"})
+			log.Println("Error generating JWT tokens:", err)
+			return
+		}
+		var response internals.TokenResponse
+		response.AccessToken = token
+
+		w.AuthKeyMutex.Lock()
+		w.BearerToken = token
+		w.AuthKeyMutex.Unlock()
+
+		c.JSON(http.StatusOK, response)
+	}
+}
 func (w *Wallet) CheckBalance() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		log.Print("check if endpoint was hit")
@@ -78,8 +112,8 @@ func (w *Wallet) CheckBalance() gin.HandlerFunc {
 // GetExchangeRate implements internals.Service.
 func (w *Wallet) GetExchangeRate() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		baseCurrency := c.Param("base")
-		targetCurrency := c.Param("target")
+		baseCurrency := c.Param("baseCurrency")
+		targetCurrency := c.Param("targetCurrency")
 		apiURL := fmt.Sprintf("https://api.exchangeratesapi.io/latest?base=%s&symbols=%s", baseCurrency, targetCurrency)
 		resp, err := http.Get(apiURL)
 		if err != nil {
@@ -117,7 +151,7 @@ func (w *Wallet) GetTransactionWithID() gin.HandlerFunc {
 		transactionID := c.Param("transactionID")
 		transaction, err := w.DB.GetTransactionWithID(userID, transactionID)
 		if err != nil {
-			if err == gorm.ErrRecordNotFound {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
 				return
 			}
@@ -135,36 +169,44 @@ func (w *Wallet) GetTransactionWithID() gin.HandlerFunc {
 		c.JSON(http.StatusOK, string(response))
 	}
 }
+
 func (w *Wallet) LoginHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var payload internals.KLoginPayload
+		var payload internals.LoginUser
 		if err := c.BindJSON(&payload); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Bad request"})
 			log.Println("Error decoding payload:", err)
 			return
 		}
-
-		_, _, err := w.DB.SearchUserByEmail(payload.Username)
+		log.Println("Received login payload:", payload)
+		_, _, err := w.DB.SearchUserByEmail(payload.Email)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unregistered user"})
-			log.Println("user not registered:", payload.Username)
+			log.Println("User not registered:", payload.Email)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error! user not found"})
 			return
 		}
-		log.Println("------------------>  ", payload)
-		loginRes, err := w.Keycloak.Login(&payload)
-		log.Println("------------------>  ", payload)
+
+		kLogin := internals.KLoginPayload{
+			ClientID:     "supper-client",
+			Username:     payload.Email,
+			Password:     payload.Password,
+			GrantType:    "password",
+			ClientSecret: "sbzfcpBSZ1RgXnOutmVI7gyvz4gyLnvL",
+		}
+
+		token, err := keyclock.Login(&kLogin)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate JWT tokens"})
-			log.Println("error generating JWT tokens:", err)
+			log.Println("Error generating JWT tokens:", err)
 			return
 		}
 
 		response := map[string]string{
-			"access_token":  loginRes.AccessToken,
-			"refresh_token": loginRes.RefreshToken,
-			"token_type":    loginRes.TokenType,
-			"session_state": loginRes.SessionState,
-			"scope":         loginRes.Scope,
+			"access_token":  token.AccessToken,
+			"refresh_token": token.RefreshToken,
+			"token_type":    token.TokenType,
+			"session_state": token.SessionState,
+			"scope":         token.Scope,
 		}
 
 		c.JSON(http.StatusOK, response)
@@ -195,6 +237,7 @@ func (w *Wallet) MakePayment() gin.HandlerFunc {
 			Txref:         payload.TxRef,
 			RedirectUrl:   "https://localhost:9090/checkBalance",
 		}
+
 		// Charge the card
 		err, resp := card.ChargeCard(details)
 		if err != nil {
@@ -225,32 +268,107 @@ func (w *Wallet) MakePayment() gin.HandlerFunc {
 	}
 }
 
-// RegisterHandler implements internals.Service.
 func (w *Wallet) RegisterHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var user internals.User
+		logrus.Info("Received registration request")
+
 		if err := c.BindJSON(&user); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Bad request"})
-			log.Println("Error decoding form:", err)
+			logrus.WithError(err).Error("Error decoding form")
 			return
 		}
+
 		user.Password, _ = Encrypt(user.Password)
 		if err := w.App.Validate.Struct(&user); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Bad request"})
-			log.Println("Validation error:", err)
+			logrus.WithError(err).Error("Validation error")
 			return
 		}
-		if err := w.DB.CreateWallet(&user); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-			log.Println("Error creating wallet for user:", err)
-			return
+		logrus.WithFields(logrus.Fields{
+			"username": user.Username,
+			"email":    user.Email,
+		}).Info("Validated user data")
+
+		kCreatePayload := internals.KCreateUserPayload{
+			Username:      user.Username,
+			FirstName:     user.FirstName,
+			LastName:      user.LastName,
+			Email:         user.Email,
+			EmailVerified: true,
+			Enabled:       true,
+			Credentials: []internals.KUserCredential{
+				{
+					Type:      "password",
+					Value:     "password",
+					Temporary: false,
+				},
+			},
+			Attributes: map[string]interface{}{
+				"attributes_key": "test_value",
+			},
 		}
-		_, err := w.DB.InsertUser(user)
+
+		jsonData, err := json.Marshal(kCreatePayload)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-			log.Println("Error adding user to database:", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error creating JSON payload"})
+			logrus.WithError(err).Error("Error marshaling JSON")
 			return
 		}
+
+		logrus.WithField("payload", string(jsonData)).Info("Sending create user request to Keycloak")
+
+		req, err := http.NewRequest("POST", "http://localhost:8080/admin/realms/test/users", bytes.NewBuffer(jsonData))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error creating request"})
+			logrus.WithError(err).Error("Error creating request")
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+w.BearerToken)
+
+		logrus.WithField("bearer_token", w.BearerToken).Info("Using Bearer token for Keycloak request")
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error performing request"})
+			logrus.WithError(err).Error("Error performing request")
+			return
+		}
+		defer resp.Body.Close()
+
+		logrus.WithField("status_code", resp.StatusCode).Info("Received response from Keycloak")
+
+		if resp.StatusCode != http.StatusCreated {
+			errorMsg := "Failed to create user in Keycloak"
+			if resp.Body != nil {
+				errorBody, _ := ioutil.ReadAll(resp.Body)
+				errorMsg += ". Response Body: " + string(errorBody)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errorMsg})
+			logrus.WithField("status_code", resp.StatusCode).Error("Non-OK HTTP status")
+			return
+		}
+		var kCreateResp internals.KCreateRes
+		if err := json.NewDecoder(resp.Body).Decode(&kCreateResp); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error decoding response"})
+			logrus.WithError(err).Error("Error decoding response")
+			return
+		}
+		logrus.WithFields(logrus.Fields{
+			"username": user.Username,
+			"email":    user.Email,
+		}).Info("User created successfully in Keycloak")
+
+		_, err = w.DB.InsertUser(user)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error adding user to database"})
+			logrus.WithError(err).Error("Error adding user to database")
+			return
+		}
+		logrus.Info("User registration completed successfully")
 		c.JSON(http.StatusOK, gin.H{"message": "Registered Successfully"})
 	}
 }
@@ -289,11 +407,13 @@ func (w *Wallet) ValidatePayment() gin.HandlerFunc {
 			log.Println("Error decoding validation payload:", err)
 			return
 		}
+
 		payload := rave.CardValidateData{
 			Otp:       validatePayload.Otp,
 			Reference: validatePayload.Reference,
-			PublicKey: secretKey,
+			PublicKey: card.PublicKey,
 		}
+
 		// Validate the card
 		err, resp := card.ValidateCard(payload)
 		if err != nil {

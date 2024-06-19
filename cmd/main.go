@@ -18,10 +18,13 @@ var app = config.NewAppTools()
 func main() {
 	gob.Register(internals.User{})
 	gob.Register(internals.Wallet{})
+	data, err := config.LoadConfig(".")
+	if err != nil {
+		log.Println("fails to load env")
+	}
+	//dsn := "root:damilola@tcp(127.0.0.1:3306)/wallet-project?charset=utf8mb4&parseTime=True&loc=Local"
 
-	dsn := "root:damilola@tcp(127.0.0.1:3306)/wallet-project?charset=utf8mb4&parseTime=True&loc=Local"
-
-	db, err := gorm.Open("mysql", dsn)
+	db, err := gorm.Open("mysql", data.DNS)
 	if err != nil {
 		log.Fatalf("failed to connect to the database: %v", err)
 		panic(err)
